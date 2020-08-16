@@ -1,3 +1,64 @@
 #!/bin/bash
 
-echo '{"version": {"revision": "N/A", "release": "N/A"}}'
+set -e
+set -o pipefail
+
+exec 3>&1 # make stdout available as fd 3 for the result
+exec 1>&2 # redirect all output to stderr for logging
+
+source /opt/resource/common.sh
+
+# Read inputs
+dest=$1
+payload=$(mktemp helm-resource-request.XXXXXX)
+cat > "${payload}" <&0
+
+# Prepare
+setup_resource "${payload}" "${dest}"
+echo "Resource setup successful."
+
+namespace=$(jq -r '.source.namespace // "default"' < "${payload}")
+release=$(jq -r '.source.release // ""' < "${payload}")
+revision=$(jq -r '.params.version.revision // ""' < "${payload}")
+namespace_overwrite=$(jq -r '.params.namespace // ""' < "${payload}")
+release_overwrite=$(jq -r '.params.release // ""' < "${payload}")
+skip_download=$(jq -r '.params.skip_download // ""' < "${payload}")
+
+if [ -n "${skip_download}" ]; then
+  echo "Skipping download based on parameter setting"
+  exit 0
+fi
+
+if [ -f "$dest/$namespace_overwrite" ]; then
+  namespace=$(cat "${dest}/${namespace_overwrite}")
+elif [ -n "${namespace_overwrite}" ]; then
+  namespace="${namespace_overwrite}"
+fi
+
+if [ -f "${dest}/${release_overwrite}" ]; then
+  release=$(cat "${dest}/${release_overwrite}")
+elif [ -n "$release_overwrite" ]; then
+  release="${release_overwrite}"
+fi
+
+FLAGS=()
+
+if [ -n "${namespace}" ]; then
+  FLAGS=("--namespace" "${namespace}")
+fi
+
+if [ -n "${revision}" ]; then
+  FLAGS=("--revision" "${revision}")
+fi
+
+if [ -n "${release}" ]; then
+  $helm_bin get all "${FLAGS[@]}" "${release}" > $dest/release.yaml
+
+  if [ -n "${revision}" ]; then
+    JQ_TRANSFORM=".[] | select(.revision==${revision}) | {\"version\": {\"revision\": .revision}, \"metadata\": (del(.revision) | to_entries | map({\"name\": .key, \"value\": .value})) }"
+    $helm_bin --namespace "${namespace}" history "${release}" -o json | jq -r "${JQ_TRANSFORM}" >&3
+  else
+    JQ_TRANSFORM=".[] | select(.name==\"${release}\") | {\"version\": {\"revision\": .revision | tostring }, \"metadata\": del(.revision) | to_entries | map({\"name\": .key, \"value\": .value})}"
+    $helm_bin --namespace "${namespace}" list -o json | jq -r "${JQ_TRANSFORM}" >&3
+  fi
+fi
