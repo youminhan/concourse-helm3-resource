@@ -29,11 +29,11 @@ fi
 if [ "$release"]
   then
   if [ $current_rev -eq "0" ]; then
-    last_rev=$($helm_bin history --max 20 $release --namespace $namespace -o json | jq -r '.[-1].revision')
-    jq -s "map({\"revision\": \"$last_rev\", \"release\": \"$release\"})" >&3
+    JQ_TRANSFORM='.[-1] | {"version": {"revision": .revision}, "metadata": (del(.revision) | to_entries | map({"name": .key, "value": .value})) }'
+    $helm_bin history --max 1 $release --namespace $namespace -o json | jq -r $JQ_TRANSFORM >&3
   else
-    rev_list=$($helm_bin history --max 20 $release --namespace $namespace -o json | jq -r '.[].revision')
-    echo $rev_list | jq -R '.' | jq -s "map({\"revision\": ., \"release\": \"$release\"})" >&3
+    JQ_TRANSFORM='.[] | {"version": {"revision": .revision}, "metadata": (del(.revision) | to_entries | map({"name": .key, "value": .value})) }'
+    $helm_bin history --max 20 $release --namespace $namespace -o json | jq -r $JQ_TRANSFORM >&3
   fi
 else
   echo '[]' | jq . >&3
