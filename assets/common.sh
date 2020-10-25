@@ -1,60 +1,64 @@
 #!/bin/bash
 set -e
 
-if [ -f "$source/$namespace_overwrite" ]; then
-  namespace=$(cat $source/$namespace_overwrite)
-elif [ -n "$namespace_overwrite" ]; then
-  namespace=$namespace
+if [ -f "$SOURCE/$NAMESPACE_OVERWRITE" ]; then
+  NAMESPACE=$(cat "$SOURCE/$NAMESPACE_OVERWRITE")
+elif [ -n "$NAMESPACE_OVERWRITE" ]; then
+  NAMESPACE=$NAMESPACE
 fi
 
 setup_kubernetes() {
-  payload=$1
-  source=$2
+  local PAYLOAD=$1 SOURCE=$2
 
-  mkdir -p /root/.kube
-  kubeconfig_path=$(jq -r '.params.kubeconfig_path // ""' < $payload)
-  absolute_kubeconfig_path="${source}/${kubeconfig_path}"
-  if [ -f "$absolute_kubeconfig_path" ]; then
-    cp "$absolute_kubeconfig_path" "/root/.kube/config"
+  KUBECONFIG_RELATIVE=$(jq -r '.params.kubeconfig_path // empty' <<<"$PAYLOAD")
+  KUBECONFIG_TEXT=$(jq -r '.source.kubeconfig // empty' <<<"$PAYLOAD")
+
+  if [[ -n "$KUBECONFIG_RELATIVE" && -f "${SOURCE}/${KUBECONFIG_RELATIVE}" ]]; then
+    export KUBECONFIG="${SOURCE}/${KUBECONFIG_RELATIVE}"
+  elif [ -n "$KUBECONFIG_TEXT" ]; then
+    KUBECONFIG=$( mktemp kubeconfig.XXXXXX )
+    echo "$KUBECONFIG_TEXT" > "$KUBECONFIG"
+    export KUBECONFIG
   else
     # Setup kubectl
-    cluster_url=$(jq -r '.source.cluster_url // ""' < $payload)
-    if [ -z "$cluster_url" ]; then
+    local CLUSTER_URL
+    CLUSTER_URL=$(jq -r '.source.cluster_url // ""' <$PAYLOAD)
+    if [ -z "$CLUSTER_URL" ]; then
       echo "invalid payload (missing cluster_url)"
       exit 1
     fi
-    if [[ "$cluster_url" =~ https.* ]]; then
-      insecure_cluster=$(jq -r '.source.insecure_cluster // "false"' < $payload)
-      cluster_ca=$(jq -r '.source.cluster_ca // ""' < $payload)
-      admin_key=$(jq -r '.source.admin_key // ""' < $payload)
-      admin_cert=$(jq -r '.source.admin_cert // ""' < $payload)
-      token=$(jq -r '.source.token // ""' < $payload)
-      token_path=$(jq -r '.params.token_path // ""' < $payload)
+    if [[ "$CLUSTER_URL" =~ https.* ]]; then
+      insecure_cluster=$(jq -r '.source.insecure_cluster // "false"' <$PAYLOAD)
+      cluster_ca=$(jq -r '.source.cluster_ca // ""' <$PAYLOAD)
+      admin_key=$(jq -r '.source.admin_key // ""' <$PAYLOAD)
+      admin_cert=$(jq -r '.source.admin_cert // ""' <$PAYLOAD)
+      token=$(jq -r '.source.token // ""' <$PAYLOAD)
+      token_path=$(jq -r '.params.token_path // ""' <$PAYLOAD)
 
       if [ "$insecure_cluster" == "true" ]; then
-        kubectl config set-cluster default --server=$cluster_url --insecure-skip-tls-verify=true
+        kubectl config set-cluster default --server="$CLUSTER_URL" --insecure-skip-tls-verify=true
       else
         ca_path="/root/.kube/ca.pem"
-        echo "$cluster_ca" | base64 -d > $ca_path
-        kubectl config set-cluster default --server=$cluster_url --certificate-authority=$ca_path
+        echo "$cluster_ca" | base64 -d >$ca_path
+        kubectl config set-cluster default --server="$CLUSTER_URL" --certificate-authority=$ca_path
       fi
 
-      if [ -f "$source/$token_path" ]; then
-        kubectl config set-credentials admin --token=$(cat $source/$token_path)
+      if [ -f "$SOURCE/$token_path" ]; then
+        kubectl config set-credentials admin --token="$(cat $SOURCE/$token_path)"
       elif [ ! -z "$token" ]; then
-        kubectl config set-credentials admin --token=$token
+        kubectl config set-credentials admin --token="$token"
       else
         mkdir -p /root/.kube
         key_path="/root/.kube/key.pem"
         cert_path="/root/.kube/cert.pem"
-        echo "$admin_key" | base64 -d > $key_path
-        echo "$admin_cert" | base64 -d > $cert_path
+        echo "$admin_key" | base64 -d >$key_path
+        echo "$admin_cert" | base64 -d >$cert_path
         kubectl config set-credentials admin --client-certificate=$cert_path --client-key=$key_path
       fi
 
       kubectl config set-context default --cluster=default --user=admin
     else
-      kubectl config set-cluster default --server=$cluster_url
+      kubectl config set-cluster default --server="$CLUSTER_URL"
       kubectl config set-context default --cluster=default
     fi
 
@@ -65,11 +69,10 @@ setup_kubernetes() {
 }
 
 setup_helm() {
-  # $1 is the name of the payload file
-  # $2 is the name of the source directory
+  # $1 is the name of the PAYLOAD file
+  # $2 is the name of the SOURCE directory
 
-
-  history_max=$(jq -r '.source.helm_history_max // "0"' < $1)
+  history_max=$(jq -r '.source.helm_history_max // "0"' <$1)
 
   helm_bin="helm"
 
@@ -78,9 +81,8 @@ setup_helm() {
   helm_setup_purge_all=$(jq -r '.source.helm_setup_purge_all // "false"' <$1)
   if [ "$helm_setup_purge_all" = "true" ]; then
     local release
-    for release in $(helm ls -aq --namespace $namespace )
-    do
-      helm delete --purge "$release" --namespace $namespace
+    for release in $(helm ls -aq --NAMESPACE $NAMESPACE); do
+      helm delete --purge "$release" --NAMESPACE $NAMESPACE
     done
   fi
 }
@@ -92,7 +94,7 @@ wait_for_service_up() {
     echo "Service $SERVICE was not ready in time"
     exit 1
   fi
-  RESULT=`kubectl get endpoints --namespace=$namespace $SERVICE -o jsonpath={.subsets[].addresses[].targetRef.name} 2> /dev/null || true`
+  RESULT=$(kubectl get endpoints --NAMESPACE=$NAMESPACE $SERVICE -o jsonpath={.subsets[].addresses[].targetRef.name} 2>/dev/null || true)
   if [ -z "$RESULT" ]; then
     sleep 1
     wait_for_service_up $SERVICE $((--TIMEOUT))
@@ -100,13 +102,12 @@ wait_for_service_up() {
 }
 
 setup_repos() {
-  repos=$(jq -c '(try .source.repos[] catch [][])' < $1)
-  plugins=$(jq -c '(try .source.plugins[] catch [][])' < $1)
+  repos=$(jq -c '(try .source.repos[] catch [][])' <$1)
+  plugins=$(jq -c '(try .source.plugins[] catch [][])' <$1)
 
   local IFS=$'\n'
 
-  if [ "$plugins" ]
-  then
+  if [ "$plugins" ]; then
     for pl in $plugins; do
       plurl=$(echo $pl | jq -cr '.url')
       plversion=$(echo $pl | jq -cr '.version // ""')
@@ -122,8 +123,7 @@ setup_repos() {
     done
   fi
 
-  if [ "$repos" ]
-  then
+  if [ "$repos" ]; then
     for r in $repos; do
       name=$(echo $r | jq -r '.name')
       url=$(echo $r | jq -r '.url')
@@ -146,7 +146,7 @@ setup_repos() {
 }
 
 setup_resource() {
-  tracing_enabled=$(jq -r '.source.tracing_enabled // "false"' < $1)
+  tracing_enabled=$(jq -r '.source.tracing_enabled // "false"' <$1)
   if [ "$tracing_enabled" = "true" ]; then
     set -x
   fi
