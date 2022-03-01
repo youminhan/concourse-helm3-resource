@@ -6,7 +6,7 @@ Heavily based on the work of https://github.com/linkyard/concourse-helm-resource
 
 ## Docker Image
 
-https://hub.docker.com/repository/docker/typositoire/concourse-helm3-resource
+https://hub.docker.com/r/youminhan/concourse-helm3
 
 ## Usage
 
