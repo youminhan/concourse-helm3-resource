@@ -8,10 +8,10 @@ elif [ -n "$NAMESPACE_OVERWRITE" ]; then
 fi
 
 setup_kubernetes() {
-  local PAYLOAD=$1 SOURCE=$2
+  local PAYLOAD=$1 SOURCE=$2 KUBECONFIG_RELATIVE KUBECONFIG_TEXT
 
-  KUBECONFIG_RELATIVE=$(jq -r '.params.kubeconfig_path // empty' <<<"$PAYLOAD")
-  KUBECONFIG_TEXT=$(jq -r '.source.kubeconfig // empty' <<<"$PAYLOAD")
+  KUBECONFIG_RELATIVE=$(jq -r '.params.kubeconfig_path // empty' <$PAYLOAD)
+  KUBECONFIG_TEXT=$(jq -r '.source.kubeconfig // empty' <$PAYLOAD)
 
   if [[ -n "$KUBECONFIG_RELATIVE" && -f "${SOURCE}/${KUBECONFIG_RELATIVE}" ]]; then
     export KUBECONFIG="${SOURCE}/${KUBECONFIG_RELATIVE}"
@@ -141,7 +141,7 @@ setup_repos() {
     $helm_bin repo update
   fi
 
-  $helm_bin repo add stable https://kubernetes-charts.storage.googleapis.com
+  $helm_bin repo add stable https://charts.helm.sh/stable
   $helm_bin repo update
 }
 
